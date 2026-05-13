@@ -58,7 +58,7 @@ public:
         curbyte = 0;
         curbits = 0;
     }
-}
+};
 
 class BitReader {
     const uint8_t* data;
@@ -101,4 +101,4 @@ public:
         if (pos >= len) return 0;
         return (len - pos - 1) + (curbits < 8 ? 1 : 0);
     }
-}
+};
