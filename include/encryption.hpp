@@ -125,3 +125,123 @@ public:
         return prevT;
     }
 };
+
+class XorEncoder {
+    bool first;
+    uint64_t prevBits;
+    int prevLead;
+    int prevTrail;
+
+public:
+    XorEncoder() : first(false), prevBits(0), prevLead(0), prevTrail(0) {}
+
+    uint64_t doubleToBits(double d) {
+        uint64_t bits;
+        std::memcpy(&bits, &d, sizeof(double));
+        return bits;
+    }
+
+    int leadingZeros(uint64_t x) {
+        if (x == 0) return 64;
+        return __builtin_clzll(x);
+    }
+
+    int trailingZeros(uint64_t x) {
+        if (x == 0) return 64;
+        return __builtin_ctzll(x);
+    }
+
+    void writeValue(double value, BitWriter* bw) {
+        uint64_t currBits = doubleToBits(value);
+        if (!first) {
+            bw->write(currBits, 64);
+            prevBits = currBits;
+            first = true;
+            return;
+        }
+        uint64_t xorBits = currBits ^ prevBits;
+
+        if (xorBits == 0) {
+            bw->write(0, 1);
+        } else {
+            int leading = leadingZeros(xorBits);
+            int trailing = trailingZeros(xorBits);
+            int meaningful = 64 - leading - trailing;
+
+            if (leading >= prevLead && trailing >= prevTrail &&
+                (prevLead + prevTrail <= 64 - meaningful)) {
+                // Prefix '10'
+                bw->write(0b10, 2);
+                uint64_t middle = (xorBits >> trailing) & ((1ULL << meaningful) - 1);
+                bw->write(middle, meaningful);
+            } else {
+                // Prefix '11'
+                bw->write(0b11, 2);
+                // Write leading 
+                uint64_t leadBits = (leading > 31) ? 31 : leading;
+                bw->write(leadBits, 5);
+                // Write (meaningful - 1) 
+                bw->write(meaningful - 1, 6);
+                uint64_t middle = (xorBits >> trailing) & ((1ULL << meaningful) - 1);
+                bw->write(middle, meaningful);
+
+                prevLead = leading;
+                prevTrail = trailing;
+            }
+        }
+        prevBits = currBits;
+    }
+};
+
+
+class XorDecoder {
+    bool first;
+    uint64_t prevBits;
+    int prevLead;
+    int prevTrail;
+
+public:
+    XorDecoder() : first(false), prevBits(0), prevLead(0), prevTrail(0) {}
+
+    double bitsToDouble(uint64_t bits) {
+        double d;
+        std::memcpy(&d, &bits, sizeof(double));
+        return d;
+    }
+
+    double readValue(BitReader* br) {
+        if (!first) {
+            prevBits = br->read(64);
+            first = true;
+            return bitsToDouble(prevBits);
+        }
+        if (br->read(1) == 0) {
+            return bitsToDouble(prevBits);
+        }
+        if (br->read(1) == 0) {
+            // Prefix '10'
+            int meaningful = 64 - prevLead - prevTrail;
+            uint64_t middle = br->read(meaningful);
+            uint64_t xorBits = middle << prevTrail;
+            uint64_t currBits = prevBits ^ xorBits;
+            prevBits = currBits;
+            return bitsToDouble(currBits);
+        } else {
+            // Prefix '11'
+            uint64_t leadBits = br->read(5);
+            int leading = static_cast<int>(leadBits);
+            uint64_t meaningful_minus_1 = br->read(6);
+            int meaningful = static_cast<int>(meaningful_minus_1) + 1;
+            uint64_t middle = br->read(meaningful);
+            int trailing = 64 - leading - meaningful;
+            uint64_t xorBits = middle << trailing;
+            uint64_t currBits = prevBits ^ xorBits;
+
+            prevLead = leading;
+            prevTrail = trailing;
+            prevBits = currBits;
+            return bitsToDouble(currBits);
+        }
+    }
+
+};
